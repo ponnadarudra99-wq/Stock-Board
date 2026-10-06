@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="stylesheet" href="style.css">
+<style>
+  #orderAmount {
+    flex: 1;
+    min-width: 0;
+    background: #0d1117;
+    color: #ffffff;
+    border: 1px solid rgba(255,255,255,.15);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+    color-scheme: dark;
+  }
+  #orderAmount::placeholder { color: #8b95a7; }
+  #orderAmount:focus { border-color: #5aa9ff; }
+  /* ---------- Mobile (added) ---------- */
+  @media (max-width: 860px) {
+    .sidebar { width: 260px; max-width: 85vw; }
+    .sidebar.open { box-shadow: 0 0 0 100vmax rgba(0,0,0,.6); }
+    .main { padding: 16px 14px 40px; }
+    .main h2 { font-size: 26px; }
+    .sub { font-size: 14px; margin: 4px 0 18px; }
+    .search { height: 54px; padding: 0 14px; margin-bottom: 22px; }
+    .table-wrap { -webkit-overflow-scrolling: touch; }
+    table { min-width: 520px; }
+    th { padding: 12px 14px; font-size: 13px; }
+    td { padding: 12px 14px; font-size: 14px; }
+    .modal { padding: 20px; }
+    .actions { flex-wrap: wrap; }
+    .dept { font-size: 19px; }
+  }
+  @media (max-width: 860px) { #orderAmount { font-size: 16px; } }
+</style>
+<title>Components - Stock Board</title></head><body data-page="components">
+<div class="layout"><aside class="sidebar" id="sidebar"></aside>
+<main class="main">
+  <h2>Components</h2><p class="sub">Manage inventory items and parameters.</p>
+  <div class="search"><i class="fa-solid fa-magnifying-glass"></i>
+    <input id="search" placeholder="Search by component name or department..."></div>
+  <div class="toolbar hidden" id="addBtnWrap"><button class="btn primary" id="addBtn"><i class="fa-solid fa-plus"></i> Add Component</button></div>
+  <div id="list"></div>
+
+  <!-- INSTANT SHOW (added): show the last saved list immediately on refresh -->
+  <script>
+  (function () {
+    try {
+      var saved = localStorage.getItem("sb_components_list_v1");
+      if (saved) document.getElementById("list").innerHTML = saved;
+    } catch (e) {}
+  })();
+  </script>
+</main></div>
+<div class="overlay" id="formOverlay">
+  <form class="modal" id="compForm" style="position:relative">
+    <button type="button" id="closeForm" aria-label="Close" style="position:absolute;top:14px;right:16px;background:none;border:none;color:#fff;font-size:24px;line-height:1;cursor:pointer">&times;</button>
+    <h3 id="formTitle">Add Component</h3>
+
+    <div class="field"><label>Department</label><input name="dept" required></div>
+    <div class="field"><label>Component Name</label><input name="name" required></div>
+
+    <div class="grid2">
+      <div class="field"><label>Current Stock</label><input name="stock" type="number" min="0" required></div>
+      <div class="field"><label>Cost (₹)</label><input name="cost" type="number" min="0" step="0.01" required></div>
+      <div class="field"><label>Min Order Quantity</label><input name="minQty" type="number" min="0" required></div>
+      <div class="field"><label>Delivery Time (Days)</label><input name="delivery" type="number" min="0" required></div>
+    </div>
+
+    <!-- kept hidden so main.js still works (not shown in the popup) -->
+    <div class="field" style="display:none"><label>Needed per device</label><input name="perDevice" type="number" min="1" value="1"></div>
+
+    <div class="actions">
+      <button type="button" class="btn" id="deleteBtn" style="margin-right:auto;color:#ff5a5a;background:rgba(255,90,90,.12);border-color:transparent"><i class="fa-solid fa-trash"></i> Delete</button>
+      <button type="button" class="btn" id="cancelForm">Cancel</button>
+      <button class="btn primary">Save Details</button>
+    </div>
+    <div id="orderSection" style="margin-top:16px;padding-top:16px;border-top:1px solid rgba(255,255,255,.08)">
+      <div style="color:#5aa9ff;font-weight:700;font-size:14px;margin-bottom:10px"><i class="fa-solid fa-truck-fast"></i> Order This Component Now</div>
+      <div style="display:flex;gap:10px">
+        <input id="orderAmount" type="number" min="1" placeholder="Order Amount">
+        <button type="button" class="btn" id="placeOrderBtn" style="background:#5aa9ff;color:#fff;border-color:transparent;font-weight:600">Place Order</button>
+      </div>
+    </div>
+  </form>
+</div>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+
+<script src="firebase-config.js"></script>
+
+<!-- FASTER LOAD (added): keep a local copy of the data so it appears at once -->
+<script>
+(function () {
+  try {
+    firebase.firestore().enablePersistence({ synchronizeTabs: true }).catch(function () {});
+  } catch (e) {}
+})();
+</script>
+
+<script src="main.js"></script>
+
+<script>
+(function () {
+  var form      = document.getElementById("compForm");
+  var amountEl  = document.getElementById("orderAmount");
+  var placeBtn  = document.getElementById("placeOrderBtn");
+  var cancelBtn = document.getElementById("cancelForm");
+  var closeBtn  = document.getElementById("closeForm");
+
+  // X button closes the popup using the existing Cancel handler
+  closeBtn.addEventListener("click", function () { cancelBtn.click(); });
+
+  // hidden "Needed per device" field: make sure it is never empty on save
+  form.addEventListener("submit", function () {
+    var pd = form.elements["perDevice"];
+    if (pd && !pd.value) pd.value = "1";
+  }, true);
+
+  placeBtn.addEventListener("click", function () {
+    var qty = parseInt(amountEl.value, 10);
+    var name = form.elements["name"].value.trim();
+    var dept = form.elements["dept"].value.trim();
+    var minQty = parseInt(form.elements["minQty"].value, 10) || 0;
+    var delivery = parseInt(form.elements["delivery"].value, 10) || 0;
+
+    if (!name) { alert("Component name is missing."); return; }
+    if (!qty || qty < 1) { alert("Please enter a valid order amount."); return; }
+    if (qty < minQty) { alert("Order amount must be at least the Min Order Quantity (" + minQty + ")."); return; }
+
+    var now = new Date();
+    var expected = new Date();
+    expected.setDate(expected.getDate() + delivery);
+
+    placeBtn.disabled = true;
+
+    firebase.firestore().collection("orders").add({
+      name: name,
+      dept: dept,
+      qty: qty,
+      orderDate: now.toISOString(),
+      expected: expected.toISOString()
+    }).then(function () {
+      alert("Order placed: " + qty + " x " + name);
+      amountEl.value = "";
+      placeBtn.disabled = false;
+      cancelBtn.click();   // closes the popup using your existing Cancel handler
+    }).catch(function (err) {
+      console.error("Place order failed:", err);
+      alert("Unable to place order. Check the console for details.");
+      placeBtn.disabled = false;
+    });
+  });
+})();
+</script>
+
+<!-- STATUS RULE: Stock vs Min Qty gap -->
+<script>
+(function () {
+  var list = document.getElementById("list");
+  if (!list) return;
+
+  // gap = Stock - Min Qty
+  //   stock below min (gap < 0)      -> Order now
+  //   stock close to min (gap 0-15)  -> Getting low
+  //   stock well above min (gap > 15)-> In Stock
+  function getStatus(stock, min) {
+    var gap = stock - min;
+    if (gap < 0) {
+      return { text: "Order now",   color: "#ff5a5a", bg: "rgba(255,90,90,.15)" };
+    }
+    if (gap <= 15) {
+      return { text: "Getting low", color: "#ffb020", bg: "rgba(255,176,32,.15)" };
+    }
+    return { text: "In Stock", color: "#2ecc71", bg: "rgba(46,204,113,.15)" };
+  }
+
+  function num(s) {
+    var m = String(s).replace(/,/g, "").match(/-?\d+(\.\d+)?/);
+    return m ? parseFloat(m[0]) : NaN;
+  }
+
+  var observer;
+  var saveTimer = null;
+
+  /* save the finished list so it can be shown instantly next time */
+  function saveCache() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {
+      try {
+        if (list.querySelector("tr")) {
+          localStorage.setItem("sb_components_list_v1", list.innerHTML);
+        }
+      } catch (e) {}
+    }, 300);
+  }
+
+  function updateStatuses() {
+    // columns: 0 Name | 1 Status | 2 Stock | 3 Min-Max | 4 Cost | 5 Delivery
+    var rows = list.querySelectorAll("tr");
+    rows.forEach(function (tr) {
+      var cells = tr.querySelectorAll("td");
+      if (cells.length < 4) return;
+      var stock = num(cells[2].textContent);
+      var min   = num(cells[3].textContent);   // first number in "Min - Max"
+      if (isNaN(stock) || isNaN(min)) return;
+
+      var s = getStatus(stock, min);
+      var badge = cells[1].firstElementChild || cells[1];
+      if (badge.textContent.trim() !== s.text) {
+        badge.textContent = s.text;
+      }
+      badge.style.color = s.color;
+      badge.style.background = s.bg;
+
+      // stock number colour follows the status (red / orange / normal)
+      cells[2].style.color = (s.text === "In Stock") ? "" : s.color;
+    });
+  }
+
+  observer = new MutationObserver(function () {
+    observer.disconnect();
+    updateStatuses();
+    observer.observe(list, { childList: true, subtree: true });
+    saveCache();
+  });
+
+  updateStatuses();
+  observer.observe(list, { childList: true, subtree: true });
+})();
+</script>
+
+<!-- SIDEBAR "Orders" BADGE = number of active orders (added) -->
+<script>
+(function () {
+  var activeOrderCount = null;
+  try {
+    var cachedCount = localStorage.getItem("sb_orders_count_v1");
+    if (cachedCount !== null) activeOrderCount = Number(cachedCount);
+  } catch (e) {}
+  var sidebarObserver = null;
+  var sb = document.getElementById("sidebar");
+
+  function findOrdersBadge() {
+    if (!sb) return null;
+    var all = sb.querySelectorAll("*");
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.children.length !== 0) continue;               // only leaf elements
+      var t = el.textContent.trim();
+      var cls = (el.className && el.className.toString()) || "";
+      var looksLikeBadge = t === "undefined" || /^\d+$/.test(t) || /badge|count|pill/i.test(cls);
+      if (!looksLikeBadge) continue;
+      var p1 = el.parentElement;
+      var p2 = p1 ? p1.parentElement : null;
+      var near = (p1 && p1 !== sb && /orders/i.test(p1.textContent)) ||
+                 (p2 && p2 !== sb && /orders/i.test(p2.textContent));
+      if (near) return el;
+    }
+    return null;
+  }
+
+  function applyOrderBadge() {
+    if (activeOrderCount === null) return;
+    var badge = findOrdersBadge();
+    if (badge && badge.textContent.trim() !== String(activeOrderCount)) {
+      badge.textContent = activeOrderCount;
+    }
+  }
+
+  if (sb) {
+    sidebarObserver = new MutationObserver(function () {
+      sidebarObserver.disconnect();
+      applyOrderBadge();
+      sidebarObserver.observe(sb, { childList: true, subtree: true, characterData: true });
+    });
+    sidebarObserver.observe(sb, { childList: true, subtree: true, characterData: true });
+  }
+  applyOrderBadge();
+
+  firebase.firestore().collection("orders").onSnapshot(function (snap) {
+    activeOrderCount = snap.size;
+    try { localStorage.setItem("sb_orders_count_v1", String(snap.size)); } catch (e) {}
+    applyOrderBadge();
+  });
+})();
+</script>
+<!-- MOBILE (added): tap outside the menu to close it -->
+<script>
+document.addEventListener("click", function (e) {
+  var sb = document.getElementById("sidebar");
+  if (!sb || !sb.classList.contains("open")) return;
+  if (sb.contains(e.target) || (e.target.closest && e.target.closest("#menuBtn"))) return;
+  sb.classList.remove("open");
+});
+</script>
+
+</body></html>
