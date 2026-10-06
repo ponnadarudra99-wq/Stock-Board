@@ -258,15 +258,44 @@
 
 
     /* RECEIVE ORDER */
-    function receiveOrder(orderId) {
+    async function receiveOrder(orderId) {
       if (!confirm("Mark this order as received?")) return;
 
-      orderDB.collection("orders").doc(orderId).delete()
-        .then(function () { alert("Order received."); })
-        .catch(function (error) {
-          console.error(error);
-          alert("Unable to receive order.");
-        });
+      try {
+        const orderRef = orderDB.collection("orders").doc(orderId);
+        const orderSnap = await orderRef.get();
+
+        if (!orderSnap.exists) {
+          alert("Order not found.");
+          return;
+        }
+
+        const orderData = orderSnap.data();
+        const componentName = orderData.name || orderData.componentName || orderData.component;
+        const orderQty = Number(orderData.qty) || 0;
+
+        // Find the matching component in the 'components' collection by name
+        const componentsSnapshot = await orderDB.collection("components").where("name", "==", componentName).get();
+
+        if (!componentsSnapshot.empty) {
+          // Component found, update its stock
+          const compDoc = componentsSnapshot.docs[0];
+          const currentStock = Number(compDoc.data().stock) || 0;
+          const newStock = currentStock + orderQty;
+
+          await compDoc.ref.update({ stock: newStock });
+        } else {
+          console.warn("Component name match not found in inventory, deleting order only.");
+        }
+
+        // Delete the order after successfully updating the stock
+        await orderRef.delete();
+        alert("Order received and stock updated automatically!");
+
+      } catch (error) {
+        console.error("Error receiving order and updating stock:", error);
+        alert("Unable to process order receipt.");
+      }
     }
 
 
