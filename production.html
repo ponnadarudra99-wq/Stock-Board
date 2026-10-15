@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    @media (max-width: 860px) {
+      .sidebar { width: 260px; max-width: 85vw; }
+      .sidebar.open { box-shadow: 0 0 0 100vmax rgba(0,0,0,.6); }
+      .main { padding: 16px 14px 40px; }
+      .main h2 { font-size: 26px; }
+      .sub { font-size: 14px; margin: 4px 0 18px; }
+      .search { height: 54px; padding: 0 14px; margin-bottom: 22px; }
+      .table-wrap { -webkit-overflow-scrolling: touch; }
+      table { min-width: 520px; }
+      th { padding: 12px 14px; font-size: 13px; }
+      td { padding: 12px 14px; font-size: 14px; }
+    }
+    @media (max-width: 860px) { #orderCount { font-size: 16px; min-width: 0; } }
+    .section-title { font-size: 20px; font-weight: 700; color: #fff; margin: 40px 0 16px; display: flex; align-items: center; gap: 10px; }
+  </style>
+  <title>Production Details - Stock Board</title>
+</head>
+<body data-page="production">
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+
+    <h2>Production Details</h2>
+    <p class="sub">Calculate component requirements and manage active production orders.</p>
+
+    <!-- STEP 1: enter number of orders -->
+    <div class="search">
+      <i class="fa-solid fa-industry blue"></i>
+      <input id="orderCount" type="number" min="1" placeholder="Enter the number of orders received...">
+    </div>
+
+    <!-- STEP 2: result table -->
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Component Name</th>
+            <th>Current Stock</th>
+            <th>Required Quantity</th>
+            <th>Min Order Qty</th>
+            <th>Cost (₹)</th>
+            <th>Total Cost (₹)</th>
+            <th>Expected Date</th>
+            <th id="actionTh" style="text-align:center">Action</th>
+          </tr>
+        </thead>
+        <tbody id="prodBody">
+          <tr><td colspan="8" style="text-align:center;padding:40px;color:#8b95a7">Enter the number of orders above to calculate requirements.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- STEP 3: ACTIVE ORDERS SECTION BELOW -->
+    <h3 class="section-title"><i class="fa-solid fa-truck"></i> Active Production Orders</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Order Qty</th>
+            <th>Order Date</th>
+            <th>Expected Delivery</th>
+            <th style="text-align:center">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="orderBody">
+          <tr><td colspan="5" style="text-align:center;padding:30px;color:#8b95a7">Loading active orders...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </main>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="main.js"></script>
+
+<script>
+(function () {
+  const COLLECTION = "components";
+  const KEY_PROD_COUNT = "sb_production_order_count";
+  const KEY_CACHE = "sb_production_cache_v1";
+
+  const body = document.getElementById("prodBody");
+  const orderBody = document.getElementById("orderBody");
+  const oldInput = document.getElementById("orderCount");
+  const input = oldInput.cloneNode(true);
+  oldInput.parentNode.replaceChild(input, oldInput);
+
+  const savedCount = localStorage.getItem(KEY_PROD_COUNT) || "";
+  if (savedCount !== "") {
+    input.value = savedCount;
+  }
+  
+  let lastCommittedCount = savedCount;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function money(n) {
+    return "₹" + Number(n).toFixed(2);
+  }
+
+  function fmtDate(value) {
+    if (!value) return "-";
+    const d = value.toDate ? value.toDate() : new Date(value);
+    if (isNaN(d.getTime())) return "-";
+    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  function dateAfter(days) {
+    var d = new Date();
+    d.setDate(d.getDate() + (Number(days) || 0));
+    return d;
+  }
+
+  function message(html, color, size) {
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:' + color + ';font-size:' + (size || 15) + 'px">' + html + "</td></tr>";
+  }
+
+  // Instant show from cache
+  try {
+    var cachedHtml = localStorage.getItem(KEY_CACHE);
+    if (cachedHtml && input.value.trim() !== "") {
+      body.innerHTML = cachedHtml;
+    }
+  } catch (e) {}
+
+  let latestComps = [];
+
+  function render() {
+    const isEmp = SB.isEmployee();
+    const actionTh = document.getElementById("actionTh");
+    if (actionTh) actionTh.style.display = isEmp ? "" : "none";
+
+    var val = input.value.trim();
+    if (val !== "") {
+      localStorage.setItem(KEY_PROD_COUNT, val);
+    } else {
+      localStorage.removeItem(KEY_PROD_COUNT);
+      localStorage.removeItem(KEY_CACHE);
+      message("Enter the number of orders above to calculate requirements.", "#8b95a7");
+      return;
+    }
+
+    var orders = parseInt(val, 10);
+    if (!orders || orders < 1) {
+      message("Enter the number of orders above to calculate requirements.", "#8b95a7");
+      return;
+    }
+
+    var rows  = [];
+    var grand = 0;
+
+    latestComps.forEach(function (c) {
+      var stock = Number(c.stock) || 0;
+      var moq   = Number(c.moq ?? c.minQty ?? c.minStock) || 1;
+      var cost  = Number(c.cost)  || 0;
+      var required = orders * (Number(c.perDevice) || 1) - stock;
+
+      if (required <= 0) return;
+
+      var orderQty = Math.max(required, moq);
+      var total = orderQty * cost;
+      grand += total;
+      var expDate = dateAfter(c.delivery);
+
+      rows.push(
+        "<tr>" +
+          '<td style="font-weight:600">' + esc(c.name) + "</td>" +
+          '<td style="text-align:right">' + stock + "</td>" +
+          '<td style="text-align:right;color:#f5822a;font-weight:700">' + required + "</td>" +
+          '<td style="text-align:right;color:#8b95a7">' + moq + "</td>" +
+          '<td style="text-align:right;color:#8b95a7">' + money(cost) + "</td>" +
+          '<td style="text-align:right;color:#ff4d4f;font-weight:700">' + money(total) + "</td>" +
+          "<td>" + fmtDate(expDate) + "</td>" +
+          (isEmp ? '<td style="text-align:center"><button id="btn-ord-' + c.id + '" class="btn sm primary" onclick="placeProdOrder(\'' + c.id + '\', ' + orderQty + ', \'' + esc(c.name) + '\', ' + c.delivery + ')">Order ' + orderQty + '</button></td>' : '<td style="display:none"></td>') +
+        "</tr>"
+      );
+    });
+
+    if (!rows.length) {
+      message('<i class="fa-solid fa-circle-check"></i> Sufficient stock available for all components. No orders required.', "#2fb344", 18);
+      try { localStorage.setItem(KEY_CACHE, body.innerHTML); } catch(e){}
+      return;
+    }
+
+    rows.push(
+      '<tr style="background:rgba(255,255,255,.03)">' +
+        '<td colspan="5" style="text-align:right;font-weight:700;color:#fff;padding:18px 16px">Grand Total Estimated Cost:</td>' +
+        '<td style="text-align:right;font-weight:800;font-size:20px;color:#ff4d4f;padding:18px 16px">' + money(grand) + "</td>" +
+        '<td colspan="2"></td>' +
+      "</tr>"
+    );
+
+    body.innerHTML = rows.join("");
+    try { localStorage.setItem(KEY_CACHE, body.innerHTML); } catch(e){}
+  }
+
+  input.addEventListener("input", function() { render(); });
+
+  input.addEventListener("change", async function() {
+    const newVal = input.value.trim();
+    if (newVal !== lastCommittedCount) {
+      const oldValText = lastCommittedCount || "None";
+      lastCommittedCount = newVal;
+      if (typeof SB !== 'undefined' && SB.logActivity) {
+        await SB.logActivity(`Updated Production Order Target: ${oldValText} → ${newVal} units`);
+      }
+    }
+  });
+
+  window.placeProdOrder = async function(compId, qty, compName, deliveryDays) {
+    if (!SB.isEmployee()) return;
+    const btn = document.getElementById('btn-ord-' + compId);
+
+    try {
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-check"></i> Ordered';
+        btn.style.background = '#2fb344';
+        btn.style.borderColor = '#2fb344';
+      }
+
+      const now = new Date();
+      const expected = dateAfter(deliveryDays);
+      const newOrder = {
+        id: Date.now(),
+        componentId: Number(compId) || compId,
+        name: compName,
+        qty: Number(qty),
+        orderDate: now.toISOString(),
+        expected: expected.toISOString()
+      };
+
+      await firebase.firestore().collection("orders").add(newOrder);
+      await SB.logActivity(`Production Order Placed: [${compName}] — Quantity: ${qty} units`);
+      SB.toast('Order placed for ' + compName);
+    } catch (e) {
+      console.error("Place order error:", e);
+      alert("Unable to place order.");
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = 'Order ' + qty;
+      }
+    }
+  };
+
+  firebase.firestore().collection(COLLECTION).onSnapshot(function (snap) {
+    latestComps = snap.docs.map(function (d) { 
+      const data = d.data();
+      return { ...data, id: d.id }; 
+    });
+    render();
+  }, function (err) {
+    console.error("Could not load components:", err);
+    message("Could not load components. Check console.", "#ff4d4f");
+  });
+
+  firebase.firestore().collection("orders").onSnapshot(function (snapshot) {
+    const isEmp = SB.isEmployee();
+    if (snapshot.empty) {
+      orderBody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:30px;color:#8b95a7">No active purchase orders.</td></tr>';
+      return;
+    }
+
+    let ordersHtml = "";
+    snapshot.forEach(function (doc) {
+      const ord = doc.data();
+      const compName = ord.name || "Unknown";
+      const qty = Number(ord.qty) || 0;
+      const orderDate = fmtDate(ord.orderDate);
+      const expected = fmtDate(ord.expected);
+      const docId = doc.id;
+
+      ordersHtml += `
+        <tr>
+          <td><div style="font-weight:600;color:#fff">${esc(compName)}</div></td>
+          <td style="color:#4da3ff;font-weight:700">${qty}</td>
+          <td style="color:#8b95a7">${orderDate}</td>
+          <td style="color:#f5822a;font-weight:600">${expected}</td>
+          ${isEmp ? `
+            <td style="text-align:center">
+              <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+                <button type="button" class="btn sm" onclick="editOrder('${docId}',${qty})">Edit</button>
+                <button type="button" class="btn sm primary" style="background:#2fb344;border-color:#2fb344;color:#fff" onclick="receiveOrder('${docId}')">Receive</button>
+                <button type="button" title="Delete order" style="background:none;border:none;color:#ff4d4f;cursor:pointer;font-size:14px" onclick="deleteOrder('${docId}')"><i class="fa-solid fa-trash"></i></button>
+              </div>
+            </td>` : '<td style="display:none"></td>'}
+        </tr>
+      `;
+    });
+    orderBody.innerHTML = ordersHtml;
+  });
+
+  window.editOrder = async function(orderId, currentQty) {
+    const inputVal = prompt("Enter new order quantity:", currentQty);
+    if (inputVal === null) return;
+    const newQty = parseInt(inputVal, 10);
+    if (!newQty || newQty < 1) { alert("Please enter a valid quantity."); return; }
+
+    try {
+      const dbRef = firebase.firestore().collection("orders").doc(orderId);
+      const snap = await dbRef.get();
+      const compName = snap.exists ? (snap.data().name || "Unknown") : "Unknown";
+
+      await dbRef.update({ qty: newQty });
+      await SB.logActivity(`Edited Order Quantity: [${compName}] — Quantity: ${currentQty} → ${newQty} units`);
+      SB.toast('Order quantity updated');
+    } catch (e) {
+      console.error(e);
+      alert("Unable to update order quantity.");
+    }
+  };
+
+  window.receiveOrder = async function(orderId) {
+    if (!confirm("Mark this order as received?")) return;
+    try {
+      const orderRef = firebase.firestore().collection("orders").doc(orderId);
+      const orderSnap = await orderRef.get();
+      if (!orderSnap.exists) { alert("Order not found."); return; }
+
+      const orderData = orderSnap.data();
+      const compName = orderData.name;
+      const orderQty = Number(orderData.qty) || 0;
+
+      const compSnap = await firebase.firestore().collection("components").where("name", "==", compName).get();
+      if (!compSnap.empty) {
+        const compDoc = compSnap.docs[0];
+        const oldStock = Number(compDoc.data().stock) || 0;
+        const newStock = oldStock + orderQty;
+        await compDoc.ref.update({ stock: newStock });
+        await SB.logActivity(`Received Order: [${compName}] — Stock updated: ${oldStock} → ${newStock} (+${orderQty} units added)`);
+      } else {
+        await SB.logActivity(`Received Order (No matching inventory): [${compName}] — Quantity: ${orderQty}`);
+      }
+
+      await orderRef.delete();
+      SB.toast('Order received and stock updated');
+    } catch (e) {
+      console.error(e);
+      alert("Unable to process order receipt.");
+    }
+  };
+
+  window.deleteOrder = async function(orderId) {
+    if (!confirm("Delete this active order?")) return;
+    try {
+      const orderRef = firebase.firestore().collection("orders").doc(orderId);
+      const snap = await orderRef.get();
+      if (snap.exists) {
+        const ord = snap.data();
+        await SB.logActivity(`Deleted Active Order: [${ord.name}] — Quantity: ${ord.qty} units`);
+      }
+      await orderRef.delete();
+      SB.toast('Order deleted');
+    } catch (e) {
+      console.error(e);
+      alert("Unable to delete order.");
+    }
+  };
+
+})();
+</script>
+
+<script>
+document.addEventListener("click", function (e) {
+  var sb = document.getElementById("sidebar");
+  if (!sb || !sb.classList.contains("open")) return;
+  if (sb.contains(e.target) || (e.target.closest && e.target.closest("#menuBtn"))) return;
+  sb.classList.remove("open");
+});
+</script>
+
+</body>
+</html>

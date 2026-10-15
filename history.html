@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .timestamp { color: #8b95a7; font-size: 13px; }
+    .user-badge { display: inline-block; padding: 3px 8px; border-radius: 6px; background: rgba(90,169,255,.15); color: #5aa9ff; font-weight: 600; font-size: 12px; }
+    /* ---------- Mobile (added) ---------- */
+    @media (max-width: 860px) {
+      .sidebar { width: 260px; max-width: 85vw; }
+      .sidebar.open { box-shadow: 0 0 0 100vmax rgba(0,0,0,.6); }
+      .main { padding: 16px 14px 40px; }
+      .main h2 { font-size: 26px; }
+      .sub { font-size: 14px; margin: 4px 0 18px; }
+      .table-wrap { -webkit-overflow-scrolling: touch; }
+      table { min-width: 520px; }
+      th { padding: 12px 14px; font-size: 13px; }
+      td { padding: 12px 14px; font-size: 14px; }
+    }
+  </style>
+  <title>Activity History - Stock Board</title>
+</head>
+<body data-page="history">
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <h2>Activity History</h2>
+    <p class="sub">Log of all system activities, edits, orders, and login events.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>User</th>
+            <th>Activity / Action</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr><td colspan="3" style="text-align:center;padding:40px;color:#8b95a7">Loading history...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="main.js"></script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const db = firebase.firestore();
+  const body = document.getElementById("historyBody");
+
+  db.collection("history").onSnapshot(function (snapshot) {
+    if (snapshot.empty) {
+      body.innerHTML = '<tr><td colspan="3" class="empty" style="text-align:center;padding:40px;color:#8b95a7"><i class="fa-solid fa-clock-rotate-left"></i> No activity history recorded yet.</td></tr>';
+      return;
+    }
+
+    const logs = [];
+    snapshot.forEach(doc => {
+      logs.push(doc.data());
+    });
+
+    // Sort descending by timestamp (newest first)
+    logs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    body.innerHTML = logs.map(log => {
+      const d = new Date(log.timestamp);
+      const timeStr = isNaN(d.getTime()) ? log.timestamp : d.toLocaleString("en-GB", {
+        day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit"
+      });
+
+      return `
+        <tr>
+          <td class="timestamp">${timeStr}</td>
+          <td><span class="user-badge">${SB.esc(log.user || 'Guest')}</span></td>
+          <td style="color:#fff;font-weight:500">${SB.esc(log.action)}</td>
+        </tr>`;
+    }).join("");
+  });
+});
+</script>
+
+<script>
+document.addEventListener("click", function (e) {
+  var sb = document.getElementById("sidebar");
+  if (!sb || !sb.classList.contains("open")) return;
+  if (sb.contains(e.target) || (e.target.closest && e.target.closest("#menuBtn"))) return;
+  sb.classList.remove("open");
+});
+</script>
+
+</body>
+</html>

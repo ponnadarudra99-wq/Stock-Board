@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="style.css">
+
+  <style>
+  /* ---------- Mobile (added) ---------- */
+  @media (max-width: 860px) {
+    .sidebar { width: 260px; max-width: 85vw; }
+    .sidebar.open { box-shadow: 0 0 0 100vmax rgba(0,0,0,.6); }
+    .main { padding: 16px 14px 40px; }
+    .main h2 { font-size: 26px; }
+    .sub { font-size: 14px; margin: 4px 0 18px; }
+    .search { height: 54px; padding: 0 14px; margin-bottom: 22px; }
+    .table-wrap { -webkit-overflow-scrolling: touch; }
+    table { min-width: 520px; }
+    th { padding: 12px 14px; font-size: 13px; }
+    td { padding: 12px 14px; font-size: 14px; }
+    .modal { padding: 20px; }
+    .actions { flex-wrap: wrap; }
+    .dept { font-size: 19px; }
+  }
+  </style>
+
+  <title>Orders - Stock Board</title>
+</head>
+
+<body data-page="orders">
+
+  <div class="layout">
+
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="main">
+
+      <h2>Active Orders</h2>
+      <p class="sub">Track expected deliveries and update stock upon arrival.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Order Qty</th>
+              <th>Order Date</th>
+              <th>Expected Delivery</th>
+              <th id="actionTh" class="hidden" style="text-align:center">Actions</th>
+            </tr>
+          </thead>
+
+          <tbody id="orderBody">
+            <tr>
+              <td colspan="5" style="text-align:center;">Loading orders...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </main>
+  </div>
+
+
+  <!-- FIREBASE -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+
+  <!-- FIREBASE CONFIG -->
+  <script src="firebase-config.js"></script>
+
+  <!-- MAIN JAVASCRIPT -->
+  <script src="main.js"></script>
+
+
+  <!-- DISPLAY FIREBASE ORDERS -->
+  <script>
+
+    const orderDB = firebase.firestore();
+    const actionTh = document.getElementById("actionTh");
+
+    /* Escape text so names can't break the HTML */
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    /* Format a date value like "3 Oct 2026" */
+    function fmtDate(value) {
+      if (!value) return "-";
+      const d = value.toDate ? value.toDate() : new Date(value);
+      if (isNaN(d.getTime())) return "-";
+      return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    }
+
+    /* Show the Action cells only when the Actions header is visible */
+    function syncActionCells() {
+      const show = !actionTh.classList.contains("hidden");
+      document.querySelectorAll(".action-cell").forEach(function (td) {
+        td.style.display = show ? "" : "none";
+      });
+    }
+    new MutationObserver(syncActionCells).observe(actionTh, { attributes: true, attributeFilter: ["class"] });
+
+
+    /* ---------- SIDEBAR "Orders" BADGE = number of active orders ---------- */
+    let activeOrderCount = null;
+    try {
+      const cachedCount = localStorage.getItem("sb_orders_count_v1");
+      if (cachedCount !== null) activeOrderCount = Number(cachedCount);
+    } catch (e) {}
+    let sidebarObserver = null;
+
+    function findOrdersBadge() {
+      const sb = document.getElementById("sidebar");
+      if (!sb) return null;
+      const all = sb.querySelectorAll("*");
+      for (let i = 0; i < all.length; i++) {
+        const el = all[i];
+        if (el.children.length !== 0) continue;               // only leaf elements
+        const t = el.textContent.trim();
+        const cls = (el.className && el.className.toString()) || "";
+        const looksLikeBadge = t === "undefined" || /^\d+$/.test(t) || /badge|count|pill/i.test(cls);
+        if (!looksLikeBadge) continue;
+        const p1 = el.parentElement;
+        const p2 = p1 ? p1.parentElement : null;
+        const near = (p1 && p1 !== sb && /orders/i.test(p1.textContent)) ||
+                     (p2 && p2 !== sb && /orders/i.test(p2.textContent));
+        if (near) return el;
+      }
+      return null;
+    }
+
+    function applyOrderBadge() {
+      if (activeOrderCount === null) return;
+      const badge = findOrdersBadge();
+      if (badge && badge.textContent.trim() !== String(activeOrderCount)) {
+        badge.textContent = activeOrderCount;
+      }
+    }
+
+    function startSidebarWatch() {
+      const sb = document.getElementById("sidebar");
+      if (!sb || sidebarObserver) return;
+      sidebarObserver = new MutationObserver(function () {
+        sidebarObserver.disconnect();
+        applyOrderBadge();
+        sidebarObserver.observe(sb, { childList: true, subtree: true, characterData: true });
+      });
+      sidebarObserver.observe(sb, { childList: true, subtree: true, characterData: true });
+    }
+    startSidebarWatch();
+    applyOrderBadge();
+    /* -------------------------------------------------------------------- */
+
+
+    orderDB.collection("orders").onSnapshot(function (snapshot) {
+
+      /* update the sidebar badge with the number of active orders */
+      activeOrderCount = snapshot.size;
+      try { localStorage.setItem("sb_orders_count_v1", String(snapshot.size)); } catch (e) {}
+      applyOrderBadge();
+
+      const orderBody = document.getElementById("orderBody");
+      if (!orderBody) return;
+
+      /* NO ORDERS */
+      if (snapshot.empty) {
+        orderBody.innerHTML = `
+          <tr>
+            <td colspan="5" style="text-align:center;">No active purchase orders.</td>
+          </tr>`;
+        return;
+      }
+
+      orderBody.innerHTML = "";
+
+      /* DISPLAY EVERY ORDER */
+      snapshot.forEach(function (doc) {
+
+        const order = doc.data();
+
+        const component = order.name || order.componentName || order.component || "Unknown";
+        const dept      = order.dept || order.department || "";
+        const quantity  = order.qty || order.quantity || order.orderQty || 0;
+        const orderDate = fmtDate(order.orderDate);
+        const expected  = fmtDate(order.expected);
+
+        const row = document.createElement("tr");
+
+        row.innerHTML = `
+          <td>
+            ${dept ? `<div style="font-size:12px;color:#8b95a7">[${esc(dept)}]</div>` : ""}
+            <div style="font-weight:600;color:#fff">${esc(component)}</div>
+          </td>
+
+          <td style="color:#4da3ff;font-weight:700">${esc(quantity)}</td>
+
+          <td style="color:#8b95a7">${orderDate}</td>
+
+          <td style="color:#f5822a;font-weight:600">${expected}</td>
+
+          <td class="action-cell">
+            <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+
+              <button type="button" class="btn sm"
+                style="font-size:11px;letter-spacing:.5px;text-transform:uppercase"
+                onclick="editOrder('${doc.id}', ${Number(quantity) || 0})">
+                Edit
+              </button>
+
+              <button type="button" class="btn sm primary"
+                style="background:#2fb344;border-color:#2fb344;color:#fff;font-size:11px;letter-spacing:.5px;text-transform:uppercase"
+                onclick="receiveOrder('${doc.id}')">
+                Receive
+              </button>
+
+              <button type="button" title="Delete order"
+                style="background:none;border:none;color:#ff4d4f;cursor:pointer;font-size:14px"
+                onclick="deleteOrder('${doc.id}')">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+
+            </div>
+          </td>
+        `;
+
+        orderBody.appendChild(row);
+      });
+
+      syncActionCells();
+    });
+
+
+    /* EDIT ORDER (change quantity with history log) */
+    window.editOrder = async function(orderId, currentQty) {
+      const input = prompt("Enter new order quantity:", currentQty);
+      if (input === null) return;
+
+      const qty = parseInt(input, 10);
+      if (!qty || qty < 1) {
+        alert("Please enter a valid quantity.");
+        return;
+      }
+
+      try {
+        const orderRef = orderDB.collection("orders").doc(orderId);
+        const snap = await orderRef.get();
+        const compName = snap.exists ? (snap.data().name || snap.data().componentName || "Unknown") : "Unknown";
+
+        await orderRef.update({ qty: qty });
+        if (typeof SB !== 'undefined' && SB.logActivity) {
+          await SB.logActivity(`Edited Order Quantity: [${compName}] — Quantity: ${currentQty} → ${qty} units`);
+        }
+        if (typeof SB !== 'undefined' && SB.toast) {
+          SB.toast('Order quantity updated');
+        }
+      } catch (error) {
+        console.error(error);
+        alert("Unable to update order.");
+      }
+    };
+
+
+    /* GLOBAL RECEIVE ORDER FUNCTION (with history log & stock update) */
+    window.receiveOrder = async function(orderId) {
+      console.log("Receive order clicked for ID:", orderId);
+      if (!confirm("Mark this order as received?")) return;
+
+      try {
+        const database = typeof db !== 'undefined' ? db : firebase.firestore();
+        const orderRef = database.collection("orders").doc(orderId);
+        const orderSnap = await orderRef.get();
+
+        if (!orderSnap.exists) {
+          console.error("Order not found in Firestore!");
+          alert("Order not found.");
+          return;
+        }
+
+        const orderData = orderSnap.data();
+        const componentName = orderData.name || orderData.componentName || orderData.component || "Unknown";
+        const orderQty = Number(orderData.qty || orderData.quantity) || 0;
+
+        // Find matching component in 'components' collection
+        const componentsSnapshot = await database.collection("components").where("name", "==", componentName).get();
+
+        if (!componentsSnapshot.empty) {
+          const compDoc = componentsSnapshot.docs[0];
+          const currentStock = Number(compDoc.data().stock) || 0;
+          const newStock = currentStock + orderQty;
+
+          await compDoc.ref.update({ stock: newStock });
+          if (typeof SB !== 'undefined' && SB.logActivity) {
+            await SB.logActivity(`Received Order: [${componentName}] — Stock updated: ${currentStock} → ${newStock} (+${orderQty} units added)`);
+          }
+        } else {
+          if (typeof SB !== 'undefined' && SB.logActivity) {
+            await SB.logActivity(`Received Order (No matching inventory): [${componentName}] — Quantity: ${orderQty}`);
+          }
+        }
+
+        // Delete order after processing
+        await orderRef.delete();
+        if (typeof SB !== 'undefined' && SB.toast) {
+          SB.toast('Order received and stock updated');
+        }
+        location.reload();
+
+      } catch (error) {
+        console.error("Error in receiveOrder:", error);
+        alert("Unable to process order receipt. Check console for details.");
+      }
+    };
+
+
+    /* DELETE ORDER (with history log) */
+    window.deleteOrder = async function(orderId) {
+      if (!confirm("Delete this order?")) return;
+
+      try {
+        const orderRef = orderDB.collection("orders").doc(orderId);
+        const snap = await orderRef.get();
+        if (snap.exists) {
+          const ord = snap.data();
+          const compName = ord.name || ord.componentName || "Unknown";
+          const qty = ord.qty || ord.quantity || 0;
+          if (typeof SB !== 'undefined' && SB.logActivity) {
+            await SB.logActivity(`Deleted Active Order: [${compName}] — Quantity: ${qty} units`);
+          }
+        }
+        await orderRef.delete();
+        if (typeof SB !== 'undefined' && SB.toast) {
+          SB.toast('Order deleted');
+        }
+      } catch (error) {
+        console.error("Error deleting order:", error);
+        alert("Unable to delete order. Check console for details.");
+      }
+    };
+
+  </script>
+
+<!-- MOBILE (added): tap outside the menu to close it -->
+<script>
+document.addEventListener("click", function (e) {
+  var sb = document.getElementById("sidebar");
+  if (!sb || !sb.classList.contains("open")) return;
+  if (sb.contains(e.target) || (e.target.closest && e.target.closest("#menuBtn"))) return;
+  sb.classList.remove("open");
+});
+</script>
+
+</body>
+
+</html>
